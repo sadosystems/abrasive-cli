@@ -6,5 +6,5 @@ struct Cli {}
 
 fn main() {
     let _cli = Cli::parse();
-    println!("Hello, world!");
+    println!("Hello, world 2!");
 }
