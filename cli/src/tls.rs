@@ -13,7 +13,7 @@ pub type WsConn = WebSocket<TlsStream>;
 /// Loads the server's CA cert from a bundled PEM or a file path.
 /// For now, uses the cert bundled at compile time.
 fn tls_config() -> Arc<rustls::ClientConfig> {
-    let cert_pem = include_bytes!("../../certs/server.crt");
+    let cert_pem = include_bytes!("../server.crt");
     let certs: Vec<_> = rustls_pemfile::certs(&mut BufReader::new(&cert_pem[..]))
         .collect::<Result<_, _>>()
         .expect("invalid server cert");
