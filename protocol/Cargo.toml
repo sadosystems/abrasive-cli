@@ -1,0 +1,10 @@
+[package]
+name = "abrasive-protocol"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+thiserror = "2.0.18"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+flate2 = "1"
