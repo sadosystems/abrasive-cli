@@ -54,11 +54,24 @@ fn connect(token: &str) -> io::Result<tls::WsConn> {
 }
 
 fn proxy(client: &mut UnixStream, ws: &mut tls::WsConn) -> io::Result<()> {
+    let mut session_started = false;
     loop {
         // Client → WS: forward until we need a daemon response
         loop {
-            let data = agent::read_msg(client)?;
+            let data = match agent::read_msg(client) {
+                Ok(data) => data,
+                // A client that hangs up before sending anything is a probe
+                // (e.g. from CLI's `spawn_agent_for_next_time`). The ws is
+                // still clean — just end this no-op session. But once we've
+                // forwarded anything, a client EOF leaves the daemon mid-
+                // protocol and the ws MUST be torn down to unblock it.
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof && !session_started => {
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            };
             ws.send(WsMessage::Binary(data.clone())).map_err(ws_to_io)?;
+            session_started = true;
             let msg = decode(&data)?;
             if matches!(
                 msg,
