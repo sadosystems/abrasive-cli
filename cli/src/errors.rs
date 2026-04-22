@@ -73,6 +73,15 @@ pub enum AuthError {
 
     #[error("unexpected token response from github: {0}")]
     UnexpectedResponse(serde_json::Value),
+
+    #[error("failed to read token from stdin: {0}")]
+    ReadStdin(#[source] std::io::Error),
+
+    #[error("no token was entered")]
+    EmptyToken,
+
+    #[error("token must start with `abrasive_`")]
+    InvalidToken,
 }
 
 pub type CliResult<T> = Result<T, CliError>;

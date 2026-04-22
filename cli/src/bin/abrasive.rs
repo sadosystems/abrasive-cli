@@ -151,11 +151,7 @@ fn remote_setup(ctx: &Option<WorkspaceContext>) -> CliResult<()> {
 }
 
 fn login() -> CliResult<()> {
-    if auth::saved_token().is_some() {
-        println!("already authenticated (token saved at ~/.config/abrasive/token)");
-        return Ok(());
-    }
-    auth::login()?;
+    auth::paste_login()?;
     Ok(())
 }
 

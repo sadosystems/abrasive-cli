@@ -12,12 +12,18 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use crate::errors::AuthError;
+
+const ABRASIVE_WEB_URL: &str = "https://abrasive.build";
+const TOKEN_PREFIX: &str = "abrasive_";
 
 /// Public OAuth App client_id for the "Claviger" GitHub OAuth App.
 /// Not a secret — it identifies the app to GitHub. Device flow does
@@ -153,10 +159,71 @@ fn write_saved_token(token: &str) -> Result<(), AuthError> {
         fs::create_dir_all(parent).map_err(AuthError::WriteToken)?;
     }
     fs::write(&path, token).map_err(AuthError::WriteToken)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    chmod_600(&path);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn chmod_600(path: &std::path::Path) {
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn chmod_600(_path: &std::path::Path) {}
+
+/// Prompt the user to paste a token from the dashboard, then save it
+/// to ~/.config/abrasive/credentials.toml.
+pub fn paste_login() -> Result<String, AuthError> {
+    eprintln!(
+        "please paste the token found on {}/me below",
+        ABRASIVE_WEB_URL
+    );
+    let _ = io::stderr().flush();
+
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .map_err(AuthError::ReadStdin)?;
+
+    let token = line.trim();
+    if token.is_empty() {
+        return Err(AuthError::EmptyToken);
     }
+    if !token.starts_with(TOKEN_PREFIX) {
+        return Err(AuthError::InvalidToken);
+    }
+
+    write_credentials(token)?;
+    eprintln!("       Login token for `abrasive` saved");
+    Ok(token.to_string())
+}
+
+/// Returns the abrasive API token saved by `paste_login`, if any.
+pub fn saved_api_token() -> Option<String> {
+    let path = credentials_path()?;
+    let raw = fs::read_to_string(&path).ok()?;
+    let parsed: toml::Value = toml::from_str(&raw).ok()?;
+    parsed
+        .get("abrasive")?
+        .get("token")?
+        .as_str()
+        .map(String::from)
+}
+
+fn credentials_path() -> Option<PathBuf> {
+    let base = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("abrasive").join("credentials.toml"))
+}
+
+fn write_credentials(token: &str) -> Result<(), AuthError> {
+    let path = credentials_path().ok_or(AuthError::NoHome)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(AuthError::WriteToken)?;
+    }
+    let content = format!("[abrasive]\ntoken = \"{}\"\n", token);
+    fs::write(&path, content).map_err(AuthError::WriteToken)?;
+    chmod_600(&path);
     Ok(())
 }
