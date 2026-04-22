@@ -22,7 +22,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use crate::errors::AuthError;
 
-const ABRASIVE_WEB_URL: &str = "https://abrasive.build";
+const ABRASIVE_WEB_URL: &str = "https://abrasive.netlify.app";
 const TOKEN_PREFIX: &str = "abrasive_";
 
 /// Public OAuth App client_id for the "Claviger" GitHub OAuth App.
