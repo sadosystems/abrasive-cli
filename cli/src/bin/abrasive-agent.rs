@@ -1,4 +1,4 @@
-use abrasive::{agent, auth, tls};
+use abrasive::{agent, auth, tags, tls};
 use abrasive_protocol::Message;
 use std::io;
 use std::net::{SocketAddr, TcpStream};
@@ -19,19 +19,19 @@ fn main() {
     let _ = fs::remove_file(&path);
     let mut ws: Option<tls::WsConn> = match connect(&token) {
         Ok(conn) => {
-            eprintln!("[agent] connected to daemon");
+            eprintln!("{} connected to daemon", tags::LOCAL);
             Some(conn)
         }
         Err(e) => {
-            eprintln!("[agent] initial connection failed: {e}");
+            eprintln!("{} initial connection failed: {e}", tags::LOCAL);
             None
         }
     };
     let listener = UnixListener::bind(&path).expect("failed to bind agent socket");
-    eprintln!("[agent] listening on {}", path.display());
+    eprintln!("{} listening on {}", tags::LOCAL, path.display());
     for client in listener.incoming().flatten() {
         if let Err(e) = handle(client, &token, &mut ws) {
-            eprintln!("[agent] session error: {e}");
+            eprintln!("{} session error: {e}", tags::LOCAL);
             ws = None;
         }
     }
@@ -40,7 +40,7 @@ fn main() {
 fn handle(mut client: UnixStream, token: &str, ws: &mut Option<tls::WsConn>) -> io::Result<()> {
     if ws.is_none() {
         *ws = Some(connect(token)?);
-        eprintln!("[agent] connected to daemon");
+        eprintln!("{} connected to daemon", tags::LOCAL);
     }
     proxy(&mut client, ws.as_mut().unwrap())
 }

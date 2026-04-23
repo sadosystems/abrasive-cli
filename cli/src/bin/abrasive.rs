@@ -4,6 +4,7 @@ use abrasive::agent;
 use abrasive::auth;
 use abrasive::errors::{self, CliError, CliResult};
 use abrasive::platform::host_triple;
+use abrasive::tags;
 use abrasive::tls;
 use abrasive_protocol::{BuildRequest, FileEntry, Manifest, Message};
 use clap::builder::styling::{AnsiColor, Styles};
@@ -271,18 +272,19 @@ fn start_sync(stream: &mut Conn, root: &Path, team: &str, scope: &str) -> CliRes
         Message::NeedFiles(paths) => Ok(SyncOutcome::Ready(paths)),
         Message::SlotsBusy => Ok(SyncOutcome::SlotsBusy),
         other => {
-            eprintln!("[sync] unexpected message: {other:?}");
+            eprintln!("{} unexpected message: {other:?}", tags::LOCAL);
             Err(CliError::disconnected())
         }
     }
 }
 
 fn build_and_log_manifest(root: &Path, team: &str, scope: &str) -> Manifest {
-    eprintln!("[sync] scanning files...");
+    eprintln!("{} scanning files...", tags::LOCAL);
     let files = build_manifest(root);
     let files_gz = Manifest::encode_files(&files);
     eprintln!(
-        "[sync] manifest: {} entries, {} bytes gzipped",
+        "{} manifest: {} entries, {} bytes gzipped",
+        tags::LOCAL,
         files.len(),
         files_gz.len()
     );
@@ -294,7 +296,7 @@ fn build_and_log_manifest(root: &Path, team: &str, scope: &str) -> Manifest {
 }
 
 fn stream_files(stream: &mut Conn, root: &Path, needed: Vec<String>) -> CliResult<()> {
-    eprintln!("[sync] sending {} files", needed.len());
+    eprintln!("{} sending {} files", tags::LOCAL, needed.len());
     let (tx, rx) = sync_channel::<(String, Vec<u8>)>(32);
     let root_buf = root.to_path_buf();
     let producer = thread::spawn(move || {
@@ -314,7 +316,7 @@ fn stream_files(stream: &mut Conn, root: &Path, needed: Vec<String>) -> CliResul
 fn wait_for_sync_ack(stream: &mut Conn) -> CliResult<()> {
     match recv_frame(stream)? {
         Message::SyncAck => {
-            eprintln!("[sync] done");
+            eprintln!("{} done", tags::LOCAL);
             Ok(())
         }
         _ => Err(CliError::disconnected()),
@@ -363,7 +365,7 @@ fn attempt_build(
     match send_probe(&mut stream, ctx, cargo_args)? {
         ProbeResult::SlotsBusy => Ok(BuildOutcome::SlotsBusy),
         ProbeResult::Accepted => {
-            eprintln!("[sync] fingerprint matched, skipping manifest");
+            eprintln!("{} fingerprint matched, skipping manifest", tags::LOCAL);
             stream_build_output(&mut stream).map(BuildOutcome::Done)
         }
         ProbeResult::Miss => match start_sync(&mut stream, &ctx.root_dir, team, scope)? {
@@ -408,7 +410,7 @@ fn send_probe(
         Message::ProbeMiss => Ok(ProbeResult::Miss),
         Message::SlotsBusy => Ok(ProbeResult::SlotsBusy),
         other => {
-            eprintln!("[sync] unexpected probe response: {other:?}");
+            eprintln!("{} unexpected probe response: {other:?}", tags::LOCAL);
             Err(CliError::disconnected())
         }
     }
@@ -416,10 +418,10 @@ fn send_probe(
 
 fn open_connection(token: &str) -> CliResult<Conn> {
     if let Ok(stream) = UnixStream::connect(agent::socket_path()) {
-        eprintln!("[conn] via agent");
+        eprintln!("{} via agent", tags::LOCAL);
         return Ok(Conn::Agent(stream));
     }
-    eprintln!("[conn] via remote");
+    eprintln!("{} via remote", tags::LOCAL);
     let addr: SocketAddr = format!("{}:{}", IP, PORT).parse().unwrap();
     let tcp =
         TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(CliError::connect)?;
@@ -463,20 +465,46 @@ fn spawn_agent_for_next_time() {
 }
 
 fn stream_build_output(stream: &mut Conn) -> CliResult<ExitCode> {
+    let mut stdout_buf = Vec::<u8>::new();
+    let mut stderr_buf = Vec::<u8>::new();
     loop {
         match recv_frame(stream)? {
             Message::BuildStdout(data) => {
-                io::stderr().write_all(b"[REMOTE] ")?;
-                io::stdout().write_all(&data)?;
+                stdout_buf.extend_from_slice(&data);
+                flush_complete_lines(&mut stdout_buf, &mut io::stdout())?;
             }
             Message::BuildStderr(data) => {
-                io::stderr().write_all(b"[REMOTE] ")?;
-                io::stderr().write_all(&data)?;
+                stderr_buf.extend_from_slice(&data);
+                flush_complete_lines(&mut stderr_buf, &mut io::stderr())?;
             }
-            Message::BuildFinished { exit_code } => break Ok(ExitCode::from(exit_code)),
+            Message::BuildFinished { exit_code } => {
+                flush_trailing(&mut stdout_buf, &mut io::stdout())?;
+                flush_trailing(&mut stderr_buf, &mut io::stderr())?;
+                break Ok(ExitCode::from(exit_code));
+            }
             _ => {}
         }
     }
+}
+
+fn flush_complete_lines(buf: &mut Vec<u8>, out: &mut impl Write) -> io::Result<()> {
+    while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
+        write!(out, "{} ", tags::REMOTE)?;
+        out.write_all(&buf[..=pos])?;
+        buf.drain(..=pos);
+    }
+    Ok(())
+}
+
+fn flush_trailing(buf: &mut Vec<u8>, out: &mut impl Write) -> io::Result<()> {
+    if buf.is_empty() {
+        return Ok(());
+    }
+    write!(out, "{} ", tags::REMOTE)?;
+    out.write_all(buf)?;
+    out.write_all(b"\n")?;
+    buf.clear();
+    Ok(())
 }
 
 #[derive(Deserialize)]
