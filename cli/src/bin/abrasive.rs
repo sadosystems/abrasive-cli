@@ -15,6 +15,8 @@ use serde::Deserialize;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::time::Duration;
@@ -324,7 +326,7 @@ fn wait_for_sync_ack(stream: &mut Conn) -> CliResult<()> {
 }
 
 enum BuildOutcome {
-    Done(ExitCode),
+    Done(u8, Option<RunArtifact>),
     SlotsBusy,
 }
 
@@ -334,18 +336,66 @@ fn try_remote(ctx: &WorkspaceContext, cargo_args: Vec<String>) -> CliResult<Exit
     if !should_go_remote(&cargo_args) {
         return forward_args_to_local();
     }
+    let run_args = extract_run_args(&cargo_args);
     let token = auth::saved_token().ok_or(errors::AuthError::NoSavedToken)?;
-    poll_for_build(ctx, cargo_args, &token)
+    let (code, artifact) = poll_for_build(ctx, cargo_args, &token)?;
+    if code != 0 {
+        return Ok(ExitCode::from(code));
+    }
+    match (run_args, artifact) {
+        (Some(args), Some(art)) => exec_artifact_locally(art, &args),
+        _ => Ok(ExitCode::from(code)),
+    }
+}
+
+/// Returns post-`--` args if and only if the command was `cargo run`,
+/// otherwise None. An empty Vec means `abrasive run` with no trailing args.
+fn extract_run_args(cargo_args: &[String]) -> Option<Vec<String>> {
+    if cargo_args.first().map(String::as_str) != Some("run") {
+        return None;
+    }
+    let after_dash = cargo_args
+        .iter()
+        .position(|a| a == "--")
+        .map(|idx| cargo_args[idx + 1..].to_vec())
+        .unwrap_or_default();
+    Some(after_dash)
+}
+
+fn exec_artifact_locally(art: RunArtifact, args: &[String]) -> CliResult<ExitCode> {
+    let path = write_temp_executable(&art.name, &art.contents)?;
+    eprintln!("{} running {}", tags::LOCAL, path.display());
+    let status = Cmd::new(&path).args(args).status()?;
+    Ok(ExitCode::from(status.code().unwrap_or(1) as u8))
+}
+
+fn write_temp_executable(name: &str, contents: &[u8]) -> io::Result<PathBuf> {
+    let path = env::temp_dir().join(format!("abrasive-run-{name}"));
+    fs::write(&path, contents)?;
+    make_executable(&path)?;
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> io::Result<()> {
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms)
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 fn poll_for_build(
     ctx: &WorkspaceContext,
     cargo_args: Vec<String>,
     token: &str,
-) -> CliResult<ExitCode> {
+) -> CliResult<(u8, Option<RunArtifact>)> {
     loop {
         match attempt_build(ctx, &cargo_args, token)? {
-            BuildOutcome::Done(code) => break Ok(code),
+            BuildOutcome::Done(code, artifact) => break Ok((code, artifact)),
             BuildOutcome::SlotsBusy => {
                 eprintln!("[abrasive] all build slots on the server are busy, retrying in 2s...");
                 thread::sleep(Duration::from_secs(2));
@@ -366,14 +416,16 @@ fn attempt_build(
         ProbeResult::SlotsBusy => Ok(BuildOutcome::SlotsBusy),
         ProbeResult::Accepted => {
             eprintln!("{} fingerprint matched, skipping manifest", tags::LOCAL);
-            stream_build_output(&mut stream).map(BuildOutcome::Done)
+            let (code, art) = stream_build_output(&mut stream)?;
+            Ok(BuildOutcome::Done(code, art))
         }
         ProbeResult::Miss => match start_sync(&mut stream, &ctx.root_dir, team, scope)? {
             SyncOutcome::SlotsBusy => Ok(BuildOutcome::SlotsBusy),
             SyncOutcome::Ready(needed) => {
                 stream_files(&mut stream, &ctx.root_dir, needed)?;
                 wait_for_sync_ack(&mut stream)?;
-                stream_build_output(&mut stream).map(BuildOutcome::Done)
+                let (code, art) = stream_build_output(&mut stream)?;
+                Ok(BuildOutcome::Done(code, art))
             }
         },
     }
@@ -464,9 +516,15 @@ fn spawn_agent_for_next_time() {
     std::mem::forget(child);
 }
 
-fn stream_build_output(stream: &mut Conn) -> CliResult<ExitCode> {
+pub struct RunArtifact {
+    pub name: String,
+    pub contents: Vec<u8>,
+}
+
+fn stream_build_output(stream: &mut Conn) -> CliResult<(u8, Option<RunArtifact>)> {
     let mut stdout_buf = Vec::<u8>::new();
     let mut stderr_buf = Vec::<u8>::new();
+    let mut artifact: Option<RunArtifact> = None;
     loop {
         match recv_frame(stream)? {
             Message::BuildStdout(data) => {
@@ -477,10 +535,13 @@ fn stream_build_output(stream: &mut Conn) -> CliResult<ExitCode> {
                 stderr_buf.extend_from_slice(&data);
                 flush_complete_lines(&mut stderr_buf, &mut io::stderr())?;
             }
+            Message::Executable { name, contents } => {
+                artifact = Some(RunArtifact { name, contents });
+            }
             Message::BuildFinished { exit_code } => {
                 flush_trailing(&mut stdout_buf, &mut io::stdout())?;
                 flush_trailing(&mut stderr_buf, &mut io::stderr())?;
-                break Ok(ExitCode::from(exit_code));
+                break Ok((exit_code, artifact));
             }
             _ => {}
         }

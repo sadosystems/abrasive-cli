@@ -36,9 +36,17 @@ pub enum Message {
     ProbeAccepted,
     ProbeMiss,
     
-    /// Vanity, tips are basically just our ping. 
+    /// Vanity, tips are basically just our ping.
     TipRequest,
     Tip(String),
+
+    /// Executable produced by a `cargo run` build on the daemon, shipped
+    /// back to the client to run locally. Sent after the build succeeds,
+    /// before BuildFinished.
+    Executable {
+        name: String,
+        contents: Vec<u8>,
+    },
 }
 
 impl Message {
@@ -60,6 +68,7 @@ impl Message {
             Message::ProbeMiss => "ProbeMiss",
             Message::TipRequest => "TipRequest",
             Message::Tip(_) => "Tip",
+            Message::Executable { .. } => "Executable",
         }
     }
 
