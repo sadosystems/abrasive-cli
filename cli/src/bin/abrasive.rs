@@ -128,12 +128,19 @@ fn print_version() {
     let _ = Cmd::new("cargo").arg("--version").status();
 }
 
-fn remote_setup(ctx: &Option<WorkspaceContext>) -> CliResult<()> {
-    if ctx.is_some() {
-        eprintln!("Setup failed, abrasive.toml already exists");
+fn remote_setup() -> CliResult<()> {
+    let cwd = env::current_dir().map_err(CliError::no_cwd)?;
+    if cwd.join("abrasive.toml").exists() {
+        eprintln!("Setup failed, abrasive.toml already exists in {}", cwd.display());
         return Ok(());
     }
-    let cwd = env::current_dir().map_err(CliError::no_cwd)?;
+    if !cwd.join("Cargo.toml").exists() {
+        eprintln!(
+            "Setup failed, no Cargo.toml in {}. Run `cargo new` or `cd` into a cargo project first.",
+            cwd.display()
+        );
+        return Ok(());
+    }
     let scope = cwd
         .file_name()
         .and_then(|n| n.to_str())
@@ -684,7 +691,7 @@ fn dispatch_abrasive_command(
     match command {
         None => print_help(),
         Some(thing) => match thing {
-            Command::Setup => remote_setup(ctx)?,
+            Command::Setup => remote_setup()?,
             Command::Auth => login()?,
             Command::Version => print_version(),
             Command::Help => print_help(),
