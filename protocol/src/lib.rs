@@ -62,6 +62,33 @@ impl Message {
             Message::Tip(_) => "Tip",
         }
     }
+
+    /// Client has finished its half of the exchange and now waits for
+    /// the daemon. Agents use this to flip from read-client to read-ws.
+    pub fn ends_client_turn(&self) -> bool {
+        matches!(
+            self,
+            Message::Probe { .. }
+                | Message::Manifest(_)
+                | Message::SyncDone
+                | Message::TipRequest
+        )
+    }
+
+    /// Daemon is asking for something. Control goes back to the client,
+    /// then the daemon will speak again.
+    pub fn yields_to_client(&self) -> bool {
+        matches!(self, Message::ProbeMiss | Message::NeedFiles(_))
+    }
+
+    /// Daemon has said its last word on this session. The agent should
+    /// close the WebSocket; the client's CLI process will exit.
+    pub fn ends_session(&self) -> bool {
+        matches!(
+            self,
+            Message::BuildFinished { .. } | Message::SlotsBusy | Message::Tip(_)
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

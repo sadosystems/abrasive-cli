@@ -72,26 +72,20 @@ fn proxy(client: &mut UnixStream, ws: &mut tls::WsConn) -> io::Result<()> {
             };
             ws.send(WsMessage::Binary(data.clone())).map_err(ws_to_io)?;
             session_started = true;
-            let msg = decode(&data)?;
-            if matches!(
-                msg,
-                Message::Probe { .. }
-                    | Message::Manifest(_)
-                    | Message::SyncDone
-                    | Message::TipRequest
-            ) {
+            if decode(&data)?.ends_client_turn() {
                 break;
             }
         }
-        // WS → Client: forward until client needs to send again
+        // WS → Client: forward until client needs to send again or session ends.
         loop {
             let data = read_ws_binary(ws)?;
             agent::write_msg(client, &data)?;
             let msg = decode(&data)?;
-            match msg {
-                Message::ProbeMiss | Message::NeedFiles(_) => break,
-                Message::BuildFinished { .. } | Message::SlotsBusy => return Ok(()),
-                _ => {}
+            if msg.ends_session() {
+                return Ok(());
+            }
+            if msg.yields_to_client() {
+                break;
             }
         }
     }
