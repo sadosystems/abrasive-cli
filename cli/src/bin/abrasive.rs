@@ -543,6 +543,7 @@ fn stream_build_output(stream: &mut Conn) -> CliResult<(u8, Option<RunArtifact>)
                 flush_complete_lines(&mut stderr_buf, &mut io::stderr())?;
             }
             Message::Executable { name, contents } => {
+                let contents = zstd::decode_all(&contents[..])?;
                 artifact = Some(RunArtifact { name, contents });
             }
             Message::BuildFinished { exit_code } => {
