@@ -162,6 +162,10 @@ fn remote_setup() -> CliResult<()> {
 
 fn login() -> CliResult<()> {
     auth::paste_login()?;
+    if let Ok(mut stream) = UnixStream::connect(agent::socket_path()) {
+        let _ = agent::send_request(&mut stream, &agent::AgentRequest::Shutdown);
+        let _ = agent::recv_response(&mut stream);
+    }
     Ok(())
 }
 

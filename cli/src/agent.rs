@@ -35,6 +35,7 @@ pub enum AgentRequest {
     StartProxy,
     GetLastSync { scope: String },
     SetLastSync { scope: String, state: LastSyncState },
+    Shutdown,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

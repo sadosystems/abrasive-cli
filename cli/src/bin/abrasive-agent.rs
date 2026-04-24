@@ -63,6 +63,11 @@ fn handle(
             handle_set_last_sync(&mut client, sync_cache, scope, state)
         }
         AgentRequest::StartProxy => handle_proxy(client, token, ws),
+        AgentRequest::Shutdown => {
+            let _ = agent::send_response(&mut client, &AgentResponse::Ok);
+            eprintln!("{} shutdown requested, exiting", tags::LOCAL);
+            process::exit(0);
+        }
     }
 }
 
